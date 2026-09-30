@@ -540,12 +540,10 @@
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            // Se houver dados locais enviados pelo usuário com contagem igual ou superior, respeita o upload
-            if (!rawData || rawData.length === 0 || parsed.length >= rawData.length) {
-              rawData = sanitizeData(parsed);
-              if (savedTime) {
-                document.getElementById('lastUpdateText').textContent = savedTime;
-              }
+            // Prioriza SEMPRE o arquivo enviado pelo usuário no navegador
+            rawData = sanitizeData(parsed);
+            if (savedTime) {
+              document.getElementById('lastUpdateText').textContent = savedTime + ' (Cache Local)';
             }
           }
         }
@@ -554,6 +552,16 @@
       currentData = [...rawData];
       populateFilters();
       applyFilters();
+
+      // Sincroniza com Painel URE pai na inicialização
+      if (window.parent && window.parent !== window && rawData.length > 0) {
+        window.parent.postMessage({
+          type: 'CHAMADOS_SYNC',
+          total: rawData.length,
+          data: rawData,
+          updatedAt: document.getElementById('lastUpdateText')?.textContent || ''
+        }, '*');
+      }
     }
 
     function populateFilters() {
@@ -930,57 +938,119 @@
       });
     }
 
+    function mapChamadoRow(row) {
+      const it = {};
+      for (const [key, rawVal] of Object.entries(row)) {
+        const k = key.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        let v = rawVal;
+        
+        if (v instanceof Date) {
+          const d = String(v.getDate()).padStart(2, '0');
+          const m = String(v.getMonth() + 1).padStart(2, '0');
+          const y = v.getFullYear();
+          const hh = String(v.getHours()).padStart(2, '0');
+          const mm = String(v.getMinutes()).padStart(2, '0');
+          v = `${d}/${m}/${y} ${hh}:${mm}`;
+        } else {
+          v = String(v !== undefined && v !== null ? v : '').trim();
+        }
+
+        if (/\bid\b|^01\b/i.test(k) || (k.includes('id') && !k.includes('atribu'))) {
+          it.id = v;
+        } else if (k.includes('subcategoria') || k.includes('sub-cat')) {
+          it.subcategoria = v;
+        } else if (k.includes('categoria')) {
+          it.categoria = v;
+        } else if (k.includes('escola') || k.includes('unidade')) {
+          it.escola = v;
+        } else if (k.includes('razao') || k.includes('motivo')) {
+          it.razao_status = v;
+        } else if (k.includes('status')) {
+          it.status = v;
+        } else if (k.includes('fila')) {
+          it.fila = v;
+        } else if (k.includes('tecnico')) {
+          it.tecnico = v;
+        } else if (k.includes('fornecedor') && !k.includes('respons')) {
+          it.fornecedor = v;
+        } else if (k.includes('respons') || k.includes('nome do respons')) {
+          it.responsavel = v;
+        } else if (k.includes('cria') || k.includes('abertura') || (k.includes('data') && !k.includes('envio'))) {
+          if (!it.data_criacao) it.data_criacao = v;
+        } else if (k.includes('envio')) {
+          it.data_envio = v;
+        }
+      }
+
+      if (!it.escola || it.escola === 'Sem informação' || it.escola === 'Sem informao' || it.escola === 'nan') {
+        it.escola = 'URE Itapeva';
+      }
+      if (!it.responsavel || it.responsavel === 'nan') {
+        it.responsavel = 'Sem informação';
+      }
+      if (!it.fornecedor || it.fornecedor === 'nan') {
+        it.fornecedor = 'Sem informação';
+      }
+      return it;
+    }
+
     function processFile(file) {
       const reader = new FileReader();
       reader.onload = function(e) {
         try {
           const data = new Uint8Array(e.target.result);
-          const wb = XLSX.read(data, { type: 'array', codepage: 65001 });
+          const wb = XLSX.read(data, {
+            type: 'array',
+            cellDates: true,
+            dateNF: 'dd/mm/yyyy hh:mm:ss'
+          });
           const ws = wb.Sheets[wb.SheetNames[0]];
           const json = XLSX.utils.sheet_to_json(ws);
 
           if (!json || json.length === 0) {
-            alert('Arquivo vazio.');
+            alert('A planilha está vazia.');
             return;
           }
 
-          rawData = json.map(row => {
-            const it = {};
-            Object.keys(row).forEach(k => {
-              const l = k.toLowerCase();
-              const v = String(row[k] || '').trim();
-              if (l.includes('id')) it.id = v;
-              else if (l.includes('subcategoria')) it.subcategoria = v;
-              else if (l.includes('categoria')) it.categoria = v;
-              else if (l.includes('escola') || l.includes('unidade')) it.escola = v;
-              else if (l.includes('raz') || (l.includes('status') && l.includes('raz'))) it.razao_status = v;
-              else if (l.includes('status')) it.status = v;
-              else if (l.includes('fila')) it.fila = v;
-              else if (l.includes('respons')) it.responsavel = v;
-              else if (l.includes('fornecedor')) it.fornecedor = v;
-              else if (l.includes('cria') || l.includes('abertura') || l.includes('data')) {
-                if (!it.data_criacao) it.data_criacao = v;
-              }
-            });
-            if (!it.escola || it.escola === 'Sem informação' || it.escola === 'nan') {
-              it.escola = 'URE Itapeva';
-            }
-            if (!it.responsavel) it.responsavel = 'Sem informação';
-            return it;
-          });
+          rawData = json.map(mapChamadoRow).filter(it => it.id || it.escola);
 
           currentData = [...rawData];
-          const nowStr = new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+          const now = new Date();
+          const nowStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+          
           try {
             localStorage.setItem('chamados_dark_pbi_data', JSON.stringify(rawData));
             localStorage.setItem('chamados_dark_pbi_time', nowStr);
-          } catch(err) {}
+          } catch(err) {
+            console.warn('Erro ao salvar no localStorage:', err);
+          }
 
-          document.getElementById('lastUpdateText').textContent = nowStr;
+          const txtEl = document.getElementById('lastUpdateText');
+          if (txtEl) txtEl.textContent = nowStr + ' (Upload Recente)';
+
           populateFilters();
           applyFilters();
+
+          // Notifica a janela pai (Painel URE) em tempo real
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: 'CHAMADOS_UPDATED',
+              total: rawData.length,
+              data: rawData,
+              updatedAt: nowStr
+            }, '*');
+          }
+
+          // Feedback visual
+          const banner = document.createElement('div');
+          banner.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-xs shadow-2xl flex items-center gap-2 border border-emerald-400/40';
+          banner.innerHTML = `<span>✓</span><span>Planilha atualizada: <strong>${rawData.length} chamados</strong> carregados com sucesso!</span>`;
+          document.body.appendChild(banner);
+          setTimeout(() => banner.remove(), 4500);
+
         } catch(err) {
-          alert('Erro ao carregar arquivo.');
+          console.error('Erro ao processar planilha:', err);
+          alert('Erro ao carregar e processar arquivo. Verifique o formato (.xlsx ou .csv).');
         }
       };
       reader.readAsArrayBuffer(file);
