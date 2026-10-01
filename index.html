@@ -6161,7 +6161,17 @@
 ];
 </script>
 <script>
-    Chart.register(ChartDataLabels);
+    // Declarar variáveis globais antes de qualquer função/chamada (evita TDZ ReferenceError)
+    var chartStatusInst = null;
+    var chartEvolucaoInst = null;
+
+    if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
+      try {
+        Chart.register(ChartDataLabels);
+      } catch (e) {
+        console.warn('Aviso ao registrar ChartDataLabels:', e);
+      }
+    }
 
     function isLightTheme() {
       return document.documentElement.getAttribute('data-theme') === 'light';
@@ -6188,18 +6198,8 @@
       }
     });
 
-    let rawData = [];
-    let currentData = [];
-
-    let chartStatusInst = null;
-    let chartEvolucaoInst = null;
-
-    window.addEventListener('DOMContentLoaded', () => {
-      loadDataFromGitHub();
-      setupDragDrop();
-    });
-
     function sanitizeData(arr) {
+      if (!Array.isArray(arr)) return [];
       return arr.map(d => {
         if (!d.escola || d.escola === 'Sem informação' || d.escola === 'Sem informao' || d.escola === 'nan') {
           d.escola = 'URE Itapeva';
@@ -6208,7 +6208,34 @@
       });
     }
 
-    // Carrega dados remotamente do GitHub Pages sem pesar o site
+    // Inicialização instantânea dos 467 chamados embutidos no HTML (0ms de latência, sem tela branca)
+    let rawData = (Array.isArray(window.__CHAMADOS_INITIAL_DATA__) && window.__CHAMADOS_INITIAL_DATA__.length > 0)
+      ? sanitizeData(window.__CHAMADOS_INITIAL_DATA__)
+      : (Array.isArray(window.__CHAMADOS_DATA__) && window.__CHAMADOS_DATA__.length > 0)
+        ? sanitizeData(window.__CHAMADOS_DATA__)
+        : [];
+    let currentData = [...rawData];
+
+    function initChamados() {
+      if (rawData.length > 0) {
+        const txtEl = document.getElementById('lastUpdateText');
+        if (txtEl && (!txtEl.textContent || txtEl.textContent.includes('Carregando'))) {
+          txtEl.textContent = '30/09/2026 15:16 (Oficial)';
+        }
+        populateFilters();
+        applyFilters();
+      }
+      loadDataFromGitHub();
+      setupDragDrop();
+    }
+
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', initChamados);
+    } else {
+      initChamados();
+    }
+
+    // Carrega dados remotamente do GitHub Pages em segundo plano sem travar a interface
     async function loadDataFromGitHub() {
       try {
         const bust = '?v=' + Date.now();
@@ -6216,19 +6243,22 @@
         const res = await fetch('./data/chamados.json' + bust);
         if (res.ok) {
           const json = await res.json();
-          rawData = sanitizeData(json);
+          if (Array.isArray(json) && json.length > 0) {
+            rawData = sanitizeData(json);
+          }
         }
 
         // Busca metadados da última atualização
         const metaRes = await fetch('./data/meta.json' + bust);
         if (metaRes.ok) {
           const meta = await metaRes.json();
-          if (meta.lastUpdate) {
-            document.getElementById('lastUpdateText').textContent = meta.lastUpdate;
+          if (meta && meta.lastUpdate) {
+            const txtEl = document.getElementById('lastUpdateText');
+            if (txtEl) txtEl.textContent = meta.lastUpdate;
           }
         }
       } catch (e) {
-        console.warn('Erro ao carregar do GitHub, verificando cache local:', e);
+        console.warn('Aviso ao sincronizar chamados remotos (mantendo dados embutidos):', e);
       }
 
       // Verifica se o usuário subiu um arquivo manualmente no navegador
@@ -6241,7 +6271,8 @@
             // Prioriza SEMPRE o arquivo enviado pelo usuário no navegador
             rawData = sanitizeData(parsed);
             if (savedTime) {
-              document.getElementById('lastUpdateText').textContent = savedTime + ' (Cache Local)';
+              const txtEl = document.getElementById('lastUpdateText');
+              if (txtEl) txtEl.textContent = savedTime + ' (Cache Local)';
             }
           }
         }
@@ -6253,12 +6284,14 @@
 
       // Sincroniza com Painel URE pai na inicialização
       if (window.parent && window.parent !== window && rawData.length > 0) {
-        window.parent.postMessage({
-          type: 'CHAMADOS_SYNC',
-          total: rawData.length,
-          data: rawData,
-          updatedAt: document.getElementById('lastUpdateText')?.textContent || ''
-        }, '*');
+        try {
+          window.parent.postMessage({
+            type: 'CHAMADOS_SYNC',
+            total: rawData.length,
+            data: rawData,
+            updatedAt: document.getElementById('lastUpdateText')?.textContent || ''
+          }, '*');
+        } catch (e) {}
       }
     }
 
@@ -6374,7 +6407,9 @@
     }
 
     function renderChartStatus() {
-      const ctx = document.getElementById('chartStatus').getContext('2d');
+      const canvas = document.getElementById('chartStatus');
+      if (!canvas || typeof Chart === 'undefined') return;
+      const ctx = canvas.getContext('2d');
       let fechados = 0, aguardando = 0, andamento = 0;
       currentData.forEach(d => {
         const s = (d.razao_status || d.status || '').toLowerCase();
@@ -6413,7 +6448,9 @@
     }
 
     function renderChartEvolucao() {
-      const ctx = document.getElementById('chartEvolucao').getContext('2d');
+      const canvas = document.getElementById('chartEvolucao');
+      if (!canvas || typeof Chart === 'undefined') return;
+      const ctx = canvas.getContext('2d');
       const counts = {};
 
       currentData.forEach(d => {
