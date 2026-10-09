@@ -6218,9 +6218,11 @@
 
     function initChamados() {
       if (rawData.length > 0) {
-        const txtEl = document.getElementById('lastUpdateText');
+        const defaultMeta = (window.__CHAMADOS_META__ && window.__CHAMADOS_META__.lastUpdate)
+          ? `${window.__CHAMADOS_META__.lastUpdate} (Oficial)`
+          : '09/10/2026 10:50 (Oficial)';
         if (txtEl && (!txtEl.textContent || txtEl.textContent.includes('Carregando'))) {
-          txtEl.textContent = '30/09/2026 15:16 (Oficial)';
+          txtEl.textContent = defaultMeta;
         }
         populateFilters();
         applyFilters();
@@ -6237,6 +6239,7 @@
 
     // Carrega dados remotamente do GitHub Pages em segundo plano sem travar a interface
     async function loadDataFromGitHub() {
+      let remoteMeta = null;
       try {
         const bust = '?v=' + Date.now();
         // Busca o dataset oficial de chamados
@@ -6251,10 +6254,13 @@
         // Busca metadados da última atualização
         const metaRes = await fetch('./data/meta.json' + bust);
         if (metaRes.ok) {
-          const meta = await metaRes.json();
-          if (meta && meta.lastUpdate) {
+          remoteMeta = await metaRes.json();
+          if (remoteMeta && remoteMeta.lastUpdate) {
             const txtEl = document.getElementById('lastUpdateText');
-            if (txtEl) txtEl.textContent = meta.lastUpdate;
+            if (txtEl) {
+              const uText = remoteMeta.lastUpdate.includes('(') ? remoteMeta.lastUpdate : `${remoteMeta.lastUpdate} (Oficial)`;
+              txtEl.textContent = uText;
+            }
           }
         }
       } catch (e) {
@@ -6268,11 +6274,17 @@
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            // Prioriza SEMPRE o arquivo enviado pelo usuário no navegador
-            rawData = sanitizeData(parsed);
-            if (savedTime) {
-              const txtEl = document.getElementById('lastUpdateText');
-              if (txtEl) txtEl.textContent = savedTime + ' (Cache Local)';
+            const officialTime = (remoteMeta && remoteMeta.lastUpdate) || (window.__CHAMADOS_META__ && window.__CHAMADOS_META__.lastUpdate);
+            // Se o arquivo oficial já foi publicado no repositório com os mesmos dados ou mais recente, limpa o cache local
+            if (officialTime && savedTime && (savedTime === officialTime || parsed.length <= rawData.length)) {
+              localStorage.removeItem('chamados_dark_pbi_data');
+              localStorage.removeItem('chamados_dark_pbi_time');
+            } else {
+              rawData = sanitizeData(parsed);
+              if (savedTime) {
+                const txtEl = document.getElementById('lastUpdateText');
+                if (txtEl) txtEl.textContent = savedTime + ' (Cache Local)';
+              }
             }
           }
         }
